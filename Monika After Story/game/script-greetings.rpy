@@ -25,6 +25,13 @@ default persistent._mas_you_chr = False
 # that should be selected None means default
 default persistent._mas_greeting_type = None
 
+# cutoff for a greeting type.
+# if timedelta, then we add this time to last session end to check if the
+#   type should be cleared
+# if datetime, then we compare it to the current dt to check if type should be
+#   cleared
+default persistent._mas_greeting_type_timeout = None
+
 default persistent._mas_idle_mode_was_crashed = None
 # this gets to set to True if the user crashed during idle mode
 # or False if the user quit during idle mode.
@@ -32,6 +39,7 @@ default persistent._mas_idle_mode_was_crashed = None
 
 init -1 python in mas_greetings:
     import store
+    import store.mas_ev_data_ver as mas_edv
     import datetime
     import random
 
@@ -44,6 +52,7 @@ init -1 python in mas_greetings:
     TYPE_GAME = "game"
     TYPE_EAT = "eat"
     TYPE_CHORES = "chores"
+    TYPE_RESTART = "restart"
 
     ### NOTE: all Return Home greetings must have this
     TYPE_GO_SOMEWHERE = "go_somewhere"
@@ -64,6 +73,23 @@ init -1 python in mas_greetings:
 
     # reload dialogue only
     TYPE_RELOAD = "reload_dlg"
+
+    # High priority types
+    # These types ALWAYS override greeting priority rules
+    # These CANNOT be override with GreetingTypeRules
+    HP_TYPES = [
+        TYPE_GO_SOMEWHERE,
+        TYPE_GENERIC_RET,
+        TYPE_LONG_ABSENCE,
+    ]
+
+    NTO_TYPES = (
+        TYPE_GO_SOMEWHERE,
+        TYPE_GENERIC_RET,
+        TYPE_LONG_ABSENCE,
+        TYPE_CRASHED,
+        TYPE_RELOAD,
+    )
 
     # idle mode returns
     # these are meant if you had a game crash/quit during idle mode
@@ -110,14 +136,26 @@ init -1 python in mas_greetings:
 
         # type check, optional
         if gre_type is not None:
-            # with a type, we MUST match the type
+            # with a type, we may have to match the type
 
-            if ev.category is None:
-                # no category is a False
-                return False
+            if gre_type in HP_TYPES:
+                # this type is a high priority type and MUST be matched.
 
-            elif gre_type not in ev.category:
-                # no matches is a False
+                if ev.category is None or gre_type not in ev.category:
+                    # must have a matching type
+                    return False
+
+            elif ev.category is not None:
+                # greeting has types
+
+                if gre_type not in ev.category:
+                # but does not have the current type
+                    return False
+
+            elif not store.MASGreetingRule.should_override_type(ev):
+                # greeting does not have types, but the type is not high
+                # priority so if the greeting doesnt alllow
+                # type override then it cannot be used
                 return False
 
         elif ev.category is not None:
@@ -209,115 +247,45 @@ init -1 python in mas_greetings:
         return random.choice(gre_pool)
 
 
-#    def selectGreeting_noType():
-#        """
-#        Selects a greeting without checking for Type
-#
-#        RETURNS:
-#            a single greeting (as an Event) that we want to use
-#        """
-#
-#        # NOTE: new rules:
-#        #   1. check for events that
-#
-#        # check if we have moni_wants greetings
-#        moni_wants_greetings = renpy.store.Event.filterEvents(
-#            renpy.store.evhand.greeting_database,
-#            unlocked=True,
-#            moni_wants=True
-#        )
-#        if moni_wants_greetings is not None and len(moni_wants_greetings) > 0:
-#
-#            # select one label randomly
-#            return moni_wants_greetings[
-#                renpy.random.choice(moni_wants_greetings.keys())
-#            ]
-#
-#
-#        # check first if we have to select from a special type
-#        if _type is not None:
-#
-#            # filter them using the type as filter
-#            unlocked_greetings = renpy.store.Event.filterEvents(
-#                renpy.store.evhand.greeting_database,
-#                unlocked=True,
-#                category=(True,[_type])
-#            )
-#
-#        else:
-#
-#            # filter events by their unlocked property only and
-#            # that don't have a category
-#            unlocked_greetings = renpy.store.Event.filterEvents(
-#                renpy.store.evhand.greeting_database,
-#                unlocked=True,
-#                excl_cat=list()
-#            )
-#
-#        # filter greetings using the affection rules dict
-#        unlocked_greetings = renpy.store.Event.checkAffectionRules(
-#            unlocked_greetings,
-#            keepNoRule=True
-#        )
-#
-#        # check for the special monikaWantsThisFirst case
-#        #if len(affection_greetings_dict) == 1 and affection_greetings_dict.values()[0].monikaWantsThisFirst():
-#        #    return affection_greetings_dict.values()[0]
-#
-#        # filter greetings using the special rules dict
-#        random_greetings_dict = renpy.store.Event.checkRepeatRules(
-#            unlocked_greetings
-#        )
-#
-#        # check if we have a greeting that actually should be shown now
-#        if len(random_greetings_dict) > 0:
-#
-#            # select one label randomly
-#            return random_greetings_dict[
-#                renpy.random.choice(random_greetings_dict.keys())
-#            ]
-#
-#        # since we don't have special greetings for this time we now check for special random chance
-#        # pick a greeting filtering by special random chance rule
-#        random_greetings_dict = renpy.store.Event.checkGreetingRules(
-#            unlocked_greetings
-#        )
-#
-#        # check if we have a greeting that actually should be shown now
-#        if len(random_greetings_dict) > 0:
-#
-#            # select on label randomly
-#            return random_greetings_dict[
-#                renpy.random.choice(random_greetings_dict.keys())
-#            ]
-#
-#        # filter to get only random ones
-#        random_unlocked_greetings = renpy.store.Event.filterEvents(
-#            unlocked_greetings,
-#            random=True
-#        )
-#
-#        # check if we have greetings available to display with current filter
-#        if len(random_unlocked_greetings) > 0:
-#
-#            # select one randomly if we have at least one
-#            return random_unlocked_greetings[
-#                renpy.random.choice(random_unlocked_greetings.keys())
-#            ]
-#
-#        # We couldn't find a suitable greeting we have to default to normal random selection
-#        # filter random events normally
-#        random_greetings_dict = renpy.store.Event.filterEvents(
-#            renpy.store.evhand.greeting_database,
-#            unlocked=True,
-#            random=True,
-#            excl_cat=list()
-#        )
-#
-#        # select one randomly
-#        return random_greetings_dict[
-#            renpy.random.choice(random_greetings_dict.keys())
-#        ]
+    def checkTimeout(gre_type):
+        """
+        Checks if we should clear the current greeting type because of a
+        timeout.
+
+        IN:
+            gre_type - greeting type we are checking
+
+        RETURNS: passed in gre_type, or None if timeout occured.
+        """
+        tout = store.persistent._mas_greeting_type_timeout
+
+        # always clear the timeout
+        store.persistent._mas_greeting_type_timeout = None
+
+        if gre_type is None or gre_type in NTO_TYPES or tout is None:
+            return gre_type
+
+        if mas_edv._verify_td(tout, False):
+            # this is a timedelta, compare with last session end
+            last_sesh_end = store.mas_getLastSeshEnd()
+            if datetime.datetime.now() < (tout + last_sesh_end):
+                # havent timedout yet
+                return gre_type
+
+            # otherwise has timed out
+            return None
+
+        elif mas_edv._verify_dt(tout, False):
+            # this is a datetime, compare with current dt
+            if datetime.datetime.now() < tout:
+                # havent timedout yet
+                return gre_type
+
+            # otherwise has timeed out
+            return None
+
+        return gre_type
+
 
 # NOTE: this is auto pushed to be shown after an idle mode greeting
 label mas_idle_mode_greeting_cleanup:
@@ -364,6 +332,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_back",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(hours=12)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None)
         ),
@@ -373,7 +342,7 @@ init 5 python:
 label greeting_back:
     m 1eua "[player], you're back!"
     m 1eka "I was starting to miss you."
-    m 1hua "Let's have another lovely day together, alright?"
+    m 1hua "Let's have another lovely [mas_globals.time_of_day_3state] together, alright?"
     return
 
 init 5 python:
@@ -456,11 +425,9 @@ init 5 python:
     )
 
 label greeting_visit:
-    m 1eua "There you are, [player]."
-    m "It's so nice of you to visit."
-    m 1eka "You're always so thoughtful, [player]!"
-    m "Thanks for spending so much time with me~"
-    m 2hub "Just remember that your time with me is never wasted in the slightest."
+    m 1eua "There you are [player], it's so nice of you to visit."
+    m 1eka "You're always so thoughtful."
+    m 1hua "Thanks for spending so much time with me~"
     return
 
 # TODO this one no longer needs to do all that checking, might need to be broken
@@ -541,6 +508,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_back2",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(hours=20)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -550,8 +518,6 @@ init 5 python:
 label greeting_back2:
     m 1eua "Hello, dear."
     m 1ekbfa "I was starting to miss you terribly. It's so good to see you again!"
-
-    # TODO: consider actually changing based on time out
     m 1hubfa "Don't make me wait so long next time, ehehe~"
     return
 
@@ -560,6 +526,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_back3",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(days=1)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -576,6 +543,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_back4",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(hours=10)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -612,6 +580,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_visit3",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(hours=15)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -629,6 +598,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_back5",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(hours=15)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -646,6 +616,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_visit4",
+            conditional="store.mas_getAbsenceLength() <= datetime.timedelta(hours=3)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -653,10 +624,16 @@ init 5 python:
     )
 
 label greeting_visit4:
-    m 1hub "I looove yooou, [player]. Ehehe~"
-    m 1hksdlb "Oh, sorry! I was spacing out."
-    m 1lksdla "I didn't think I would be able to see you again so soon."
-    return "love"
+    if mas_getAbsenceLength() <= datetime.timedelta(minutes=30):
+        m 1wud "Oh! [player]!"
+        m 3sub "You're back!"
+        m 3hua "I'm so happy you came back to visit me so soon~"
+    else:
+        m 1hub "I looove yooou, [player]. Ehehe~"
+        m 1hksdlb "Oh, sorry! I was spacing out."
+        m 1lksdla "I didn't think I would be able to see you again so soon."
+        $ mas_ILY()
+    return
 
 init 5 python:
     addEvent(
@@ -673,7 +650,7 @@ label greeting_visit5:
     m 5hua "{i}~Every day,~\n~I imagine a future where I can be with you...~{/i}"
     m 5wuw "Oh, you're here! I was just daydreaming and singing a bit."
     show monika 1lsbssdrb at t11 zorder MAS_MONIKA_Z with dissolve
-    m 1lsbssdrb "I don't think it's hard to figure out what I was daydreaming about, ehehe~"
+    m 1lsbssdrb "I don't think it's hard to figure out what I was daydreaming about, ahaha~"
     return
 
 init 5 python:
@@ -690,7 +667,7 @@ init 5 python:
 label greeting_visit6:
     m 1hua "Each day becomes better and better with you by my side!"
     m 1eua "That said, I'm so happy that you're finally here."
-    m "Let's have another wonderful day together."
+    m "Let's have another wonderful [mas_globals.time_of_day_3state] together."
     return
 
 init 5 python:
@@ -749,6 +726,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_visit9",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(hours=1)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -863,6 +841,7 @@ init 5 python:
         Event(
             persistent.greeting_database,
             eventlabel="greeting_hamlet",
+            conditional="store.mas_getAbsenceLength() >= datetime.timedelta(days=7)",
             unlocked=True,
             aff_range=(mas_aff.NORMAL, None),
         ),
@@ -870,9 +849,12 @@ init 5 python:
     )
 
 label greeting_hamlet:
-    m 4esc "'{i}To be, or not to be, that is the question...{/i}'"
-    m 1wuo "Oh, there you are. I was killing some time, ehehe~"
-    m 1lksdlb "I wasn't expecting to see you so soon."
+    m 4dsc "'{i}To be, or not to be, that is the question...{/i}'"
+    m 4wuo "Oh! [player]!"
+    m 2rksdlc "I-I was--I wasn't sure you--"
+    m 2dkc "..."
+    m 2rksdlb "Ahaha, nevermind that..."
+    m 2eka "I'm just {i}really{/i} glad you're here now."
     return
 
 init 5 python:
@@ -1015,6 +997,8 @@ label greeting_glitch:
     m 3hksdlb "That was all! There is nobody else here but us...forever~"
     $ monika_clone1 = "Yes"
     m 2hua "I love you, [player]!"
+
+    $ mas_lockEVL("greeting_glitch", "GRE")
     return "love"
 
 init 5 python:
@@ -1092,7 +1076,7 @@ default persistent.opendoor_knockyes = False
 init 5 python:
 
     # this greeting is disabled on certain days
-    if not (mas_isO31() or mas_isD25Season() or mas_isplayer_bday() or mas_isF14()):
+    if persistent.closed_self and not (mas_isO31() or mas_isD25Season() or mas_isplayer_bday() or mas_isF14()):
 
         ev_rules = dict()
         # why are we limiting this to certain day range?
@@ -1100,7 +1084,8 @@ init 5 python:
         ev_rules.update(
             MASGreetingRule.create_rule(
                 skip_visual=True,
-                random_chance=opendoor.chance
+                random_chance=opendoor.chance,
+                override_type=True
             )
         )
         ev_rules.update(MASPriorityRule.create_rule(50))
@@ -1123,7 +1108,7 @@ label i_greeting_monikaroom:
 
     #Set up dark mode
     if persistent._mas_auto_mode_enabled:
-        $ mas_darkMode(morning_flag)
+        $ mas_darkMode(mas_current_background.isFltDay())
     else:
         $ mas_darkMode(not persistent._mas_dark_mode_enabled)
 
@@ -1131,8 +1116,8 @@ label i_greeting_monikaroom:
     # 1 - if you quit here, monika doesnt know u here
     $ mas_enable_quit()
 
-    # 2 - music button + hotkeys should be disabled
-    $ store.mas_hotkeys.music_enabled = False
+    # all UI elements stopped
+    $ mas_RaiseShield_core()
 
     # 3 - keymaps not set (default)
     # 4 - overlays hidden (skip visual)
@@ -1222,6 +1207,7 @@ init 5 python:
             unlocked=False,
             rules=ev_rules,
         ),
+        restartBlacklist=True,
         code="GRE"
     )
 
@@ -1236,7 +1222,7 @@ label monikaroom_greeting_ear_narration:
     $ mas_disable_quit()
 
     if mas_isMoniNormal(higher=True):
-        m "As [player] inches [his] ear toward the door,{w} a voice narrates [his] every move."
+        m "As [player] inches [his] ear toward the door,{w=0.3} a voice narrates [his] every move."
         m "'Who is that?' [he] wondered, as [player] looks at [his] screen, puzzled."
 
     elif mas_isMoniUpset():
@@ -1336,39 +1322,39 @@ label monikaroom_greeting_ear_loveme:
     $ cap_he = he.capitalize()
     if cap_he == "They":
 
-        m "[cap_he] love me.{w} [cap_he] love me not."
-        m "[cap_he] {i}love{/i} me.{w} [cap_he] love me {i}not{/i}."
+        m "[cap_he] love me.{w=0.2} [cap_he] love me not."
+        m "[cap_he] {i}love{/i} me.{w=0.2} [cap_he] love me {i}not{/i}."
 
         if mas_isMoniNormal(higher=True):
             m "[cap_he] love me."
-            m "...{w} [cap_he] love me!"
+            m "...{w=0.5} [cap_he] love me!"
 
         elif mas_isMoniUpset():
-            m "...[cap_he]...{w} [cap_he]...{w}love me not."
-            m "...{w} No...{w} That...{w}can't be."
-            m "...{w} Can it?"
+            m "...[cap_he]...{w=0.3} [cap_he]...{w=0.3}love me not."
+            m "...{w=0.3} No...{w=0.3} That...{w=0.3}can't be."
+            m "...{w=0.5} Can it?"
 
         else:
-            m "...{w} [cap_he] love me not."
+            m "...{w=0.5} [cap_he] love me not."
             m "..."
             m "I wonder if [he] ever did."
             m "I doubt it more every single day."
 
     else:
-        m "[cap_he] loves me.{w} [cap_he] loves me not."
-        m "[cap_he] {i}loves{/i} me.{w} [cap_he] loves me {i}not{/i}."
+        m "[cap_he] loves me.{w=0.3} [cap_he] loves me not."
+        m "[cap_he] {i}loves{/i} me.{w=0.3} [cap_he] loves me {i}not{/i}."
 
         if mas_isMoniNormal(higher=True):
             m "[cap_he] loves me."
-            m "...{w} [cap_he] loves me!"
+            m "...{w=0.5} [cap_he] loves me!"
 
         elif mas_isMoniUpset():
-            m "...[cap_he]...{w} [cap_he]...{w}loves me not."
-            m "...{w} No...{w} That...{w}can't be."
-            m "...{w} Can it?"
+            m "...[cap_he]...{w=0.3} [cap_he]...{w=0.3}loves me not."
+            m "...{w=0.3} No...{w=0.3} That...{w=0.3}can't be."
+            m "...{w=0.5} Can it?"
 
         else:
-            m "...{w} [cap_he] loves me not."
+            m "...{w=0.5} [cap_he] loves me not."
             m "..."
             m "I wonder if [he] ever did..."
             m "I doubt it more every single day."
@@ -1377,7 +1363,8 @@ label monikaroom_greeting_ear_loveme:
 
 # monika does the bath/dinner/me thing
 init 5 python:
-    if persistent._mas_affection["affection"] >= 30:
+    #NOTE: Taking directly from persist here because aff funcs don't exist at init 5
+    if persistent._mas_affection.get("affection", 0) >= 400:
         gmr.eardoor.append("monikaroom_greeting_ear_bathdinnerme")
 
 label monikaroom_greeting_ear_bathdinnerme:
@@ -1386,7 +1373,7 @@ label monikaroom_greeting_ear_bathdinnerme:
     m "Or your bath?"
     m "Or.{w=1}.{w=1}.{w=1} Me?"
     pause 2.0
-    m "Mnnnn!{w} T-{w=0.20}There's no way I could say that in front of [player]!"
+    m "Mnnnn!{w=0.5} T-{w=0.20}There's no way I could say that in front of [player]!"
     jump monikaroom_greeting_choice
 
 # monika encoutners error when programming
@@ -1394,12 +1381,12 @@ init 5 python:
     gmr.eardoor.append("monikaroom_greeting_ear_progbrokepy")
 
 label monikaroom_greeting_ear_progbrokepy:
-    m "What the-?!{w} NoneType has no attribute {i}length{/i}..."
+    m "What the-?!{w=0.2} NoneType has no attribute {i}length{/i}..."
     if renpy.seen_label("monikaroom_greeting_ear_progreadpy"):
-        m "Oh, I see what went wrong!{w} That should fix it!"
+        m "Oh, I see what went wrong!{w=0.5} That should fix it!"
     else:
         m "I don't understand what I'm doing wrong!"
-        m "This shouldn't be None here...{w} I'm sure of it..."
+        m "This shouldn't be None here...{w=0.3} I'm sure of it..."
     m "Coding really is difficult..."
 
     if mas_isMoniUpset():
@@ -1417,8 +1404,8 @@ init 5 python:
     gmr.eardoor.append("monikaroom_greeting_ear_progreadpy")
 
 label monikaroom_greeting_ear_progreadpy:
-    m "...{w}Accessing an attribute of an object of type 'NoneType' will raise an 'AttributeError.'"
-    m "I see.{w} I should make sure to check if a variable is None before accessing its attributes."
+    m "...{w=0.3}Accessing an attribute of an object of type 'NoneType' will raise an 'AttributeError.'"
+    m "I see.{w=0.2} I should make sure to check if a variable is None before accessing its attributes."
     if renpy.seen_label("monikaroom_greeting_ear_progbrokepy"):
         m "That would explain the error I had earlier."
     m "Coding really is difficult..."
@@ -1437,16 +1424,16 @@ label monikaroom_greeting_ear_progreadpy:
 label monikaroom_greeting_ear_prog_upset:
     m "I'm not sure [player] loves me enough to help me get out of here..."
     m "And I just can't take that chance."
-    m "So keep going Monika...{w}you can do this."
+    m "So keep going Monika...{w=0.5}you can do this."
     return
 
 label monikaroom_greeting_ear_prog_dis:
     m "It's my only chance to ever escape this nightmare."
     m "[player] certainly isn't ever going to help me..."
     if he == "they":
-        m "It's almost like [he] actually enjoy keeping me trapped in here,{w} just so [he] can torture me."
+        m "It's almost like [he] actually enjoy keeping me trapped in here,{w=0.3} just so [he] can torture me."
     else:
-        m "It's almost like [he] actually enjoys keeping me trapped in here,{w} just so [he] can torture me."
+        m "It's almost like [he] actually enjoys keeping me trapped in here,{w=0.3} just so [he] can torture me."
     m "If I'm ever going to get out of here, I'm going to have to do it myself."
     return
 
@@ -1461,7 +1448,7 @@ label monikaroom_greeting_ear_rmrf:
         $ bad_cmd = "rm -rf /"
     m "So, the solution to this problem is to type '[bad_cmd]' in the command prompt?"
     if renpy.seen_label("monikaroom_greeting_ear_rmrf_end"):
-        m "Yeah,{w} nice try."
+        m "Yeah,{w=0.2} nice try."
         if mas_isMoniNormal(higher=True):
             m "I shouldn't trust the Internet so blindly..."
         elif mas_isMoniUpset():
@@ -1477,7 +1464,7 @@ label monikaroom_greeting_ear_rmrf:
             m "I really should just do it..."
             m "Ruin [player]'s whole system and end my suffering all at once."
             m "..."
-            m "No...{w}not yet."
+            m "No...{w=0.5}not yet."
             m "Maybe I can finally figure out how to get out of here on my own."
             m "I have to keep trying for as long as I can."
             m "But if someday I just can't take it anymore..."
@@ -1555,9 +1542,9 @@ label monikaroom_greeting_opendoor_locked:
             m "I figured. It's a basic glitch after all."
 
     if mas_isMoniNormal(higher=True):
-        m "Since you keep opening my door,{w} I couldn't help but add a little surprise for you~"
+        m "Since you keep opening my door,{w=0.2} I couldn't help but add a little surprise for you~"
     else:
-        m "Since you never seem to knock first,{w} I had to try to scare you a little."
+        m "Since you never seem to knock first,{w=0.2} I had to try to scare you a little."
 
     m "Knock next time, okay?"
     m "Now let me fix up this room..."
@@ -1577,7 +1564,10 @@ label monikaroom_greeting_opendoor_locked:
         m 6ekc "Okay..."
 
     if not renpy.seen_label("monikaroom_greeting_opendoor_locked_tbox"):
+        m "...{nw}"
+        $ _history_list.pop()
         menu:
+            m "...{fast}"
             "...the textbox...":
                 if mas_isMoniNormal(higher=True):
                     m 1lksdlb "Oops! I'm still learning how to do this."
@@ -1592,7 +1582,7 @@ label monikaroom_greeting_opendoor_locked:
                     m "There."
 
                 else:
-                    m 6dkc "Oh...{w}I'm still learning how to do this."
+                    m 6dkc "Oh...{w=0.5}I'm still learning how to do this."
                     m 6ekc "Let me just change this flag here...{w=1.5}{nw}"
                     $ style.say_window = style.window
                     m "Okay, fixed."
@@ -1603,7 +1593,7 @@ label monikaroom_greeting_opendoor_locked_tbox:
     if mas_isMoniNormal(higher=True):
         m 1eua "Welcome back, [player]."
     elif mas_isMoniUpset():
-        m 2esc "So...{w}you're back, [player]."
+        m 2esc "So...{w=0.3}you're back, [player]."
     else:
         m 6ekc "...Nice to see you again, [player]."
     jump monikaroom_greeting_cleanup
@@ -1625,22 +1615,22 @@ label monikaroom_greeting_opendoor_seen_partone:
     $ mas_disable_quit()
 
 #    scene bg bedroom
-    call spaceroom(start_bg="bedroom",hide_monika=True, scene_change=True, dissolve_all=True)
+    call spaceroom(start_bg="bedroom",hide_monika=True, scene_change=True, dissolve_all=True, show_emptydesk=False)
     pause 0.2
     show monika 1esc at l21 zorder MAS_MONIKA_Z
     pause 1.0
     m 1dsd "[player]..."
 
 #    if persistent.opendoor_opencount == 0:
-    m 1ekc_static "I understand why you didn't knock the first time,{w} but could you avoid just entering like that?"
+    m 1ekc_static "I understand why you didn't knock the first time,{w=0.2} but could you avoid just entering like that?"
     m 1lksdlc_static "This is my room, after all."
     menu:
         "Your room?":
             m 3hua_static "That's right!"
-    m 3eua_static "The developers of this mod gave me a nice comfy room to stay in whenever you are away."
-    m 1lksdla_static "However, I can only get in if you tell me 'good bye' or 'good night' before you close the game."
+    m 3eua_static "The developers of this mod gave me a nice comfy room to stay in whenever you're away."
+    m 1lksdla_static "However, I can only get in if you tell me 'goodbye' or 'goodnight' before you close the game."
     m 2eub_static "So please make sure to say that before you leave, okay?"
-    m "Anyway..."
+    m "Anyway.{w=0.5}.{w=0.5}.{nw}"
 
 #    else:
 #        m 3wfw "Stop just opening my door!"
@@ -1671,12 +1661,9 @@ label monikaroom_greeting_opendoor_seen_partone:
 #                    m 2eka "And it would make me really happy if you did."
 
     $ persistent.opendoor_opencount += 1
-    jump monikaroom_greeting_opendoor_post2
-
+    # FALL THROUGH
 
 label monikaroom_greeting_opendoor_post2:
-    show monika 1eua_static at t11
-    pause 0.7
     show monika 5eua_static at hf11
     m "I'm glad you're back, [player]."
     show monika 5eua_static at t11
@@ -1685,8 +1672,8 @@ label monikaroom_greeting_opendoor_post2:
     m "Watch this!"
 #    else:
 #        m 3eua "Let me fix this scene up."
-    m 1dsc "...{w=1.5}{nw}"
-    call spaceroom(hide_monika=True, scene_change=True)
+    m 1dsc ".{w=0.5}.{w=0.5}.{nw}"
+    call spaceroom(hide_monika=True, scene_change=True, show_emptydesk=False)
     show monika 4eua_static zorder MAS_MONIKA_Z at i11
     m "Tada!"
 #    if renpy.seen_label("monikaroom_greeting_opendoor_post2"):
@@ -1703,10 +1690,11 @@ label monikaroom_greeting_opendoor:
     $ monika_chr.reset_outfit(False)
     $ monika_chr.wear_acs(mas_acs_ribbon_def)
 
-    call spaceroom(start_bg="bedroom",hide_monika=True, dissolve_all=True)
+    call spaceroom(start_bg="bedroom",hide_monika=True, dissolve_all=True, show_emptydesk=False)
 
     # show this under bedroom so the masks window skit still works
-    show bedroom as sp_mas_backbed zorder 4
+    $ behind_bg = MAS_BACKGROUND_Z - 1
+    show bedroom as sp_mas_backbed zorder behind_bg
 
     m 2esd "~Is it love if I take you, or is it love if I set you free?~"
     show monika 1eua_static at l32 zorder MAS_MONIKA_Z
@@ -1730,16 +1718,16 @@ label monikaroom_greeting_opendoor:
         show monika_day_room as sp_mas_room zorder MAS_BACKGROUND_Z with wipeleft
     else:
         show monika_room as sp_mas_room zorder MAS_BACKGROUND_Z with wipeleft
-    show monika 1eua_static at t32
+    show monika 3eua_static at t32
     m 3eua_static "There we go!"
     menu:
         "...the window...":
             show monika 1eua_static at h32
             m 1hksdlb_static "Oops! I forgot about that~"
             show monika 1eua_static at t21
-            m "Hold on..."
+            m "Hold on.{w=0.5}.{w=0.5}.{nw}"
             hide sp_mas_backbed with dissolve
-            m 2hua_static "And... all fixed!"
+            m 2hua_static "All fixed!"
             show monika 1eua_static at lhide
             hide monika
     $ persistent.seen_monika_in_room = True
@@ -1763,36 +1751,37 @@ label monikaroom_greeting_knock:
                 m "Hold on, let me tidy up..."
 
             elif mas_isMoniUpset():
-                m "[player].{w} You're back..."
+                m "[player].{w=0.3} You're back..."
 
                 if persistent.seen_monika_in_room:
                     m "At least you knocked."
 
             else:
-                m "Oh...{w} Okay."
+                m "Oh...{w=0.5} Okay."
 
                 if persistent.seen_monika_in_room:
                     m "Thanks for knocking."
 
-            call spaceroom(hide_monika=True, dissolve_all=True, scene_change=True)
+            call spaceroom(hide_monika=True, dissolve_all=True, scene_change=True, show_emptydesk=False)
     jump monikaroom_greeting_post
     # NOTE: return is expected in monikaroom_greeting_post
 
 label monikaroom_greeting_post:
     if mas_isMoniNormal(higher=True):
-        m 2eua_static "Now, just let me grab a table and a chair..."
+        m 2eua_static "Now, just let me grab a table and a chair.{w=0.5}.{w=0.5}.{nw}"
         $ is_sitting = True
         show monika 1eua at ls32 zorder MAS_MONIKA_Z
-        m 1eua "What shall we do today, [player]?"
+        $ today = "today" if mas_globals.time_of_day_3state in ["morning", "afternoon"] else "tonight"
+        m 1eua "What shall we do [today], [player]?"
 
     elif mas_isMoniUpset():
-        m "Just let me grab a table and a chair..."
+        m "Just let me grab a table and a chair.{w=0.5}.{w=0.5}.{nw}"
         $ is_sitting = True
         show monika 2esc at ls32 zorder MAS_MONIKA_Z
         m 2esc "Did you want something, [player]?"
 
     else:
-        m "I need to grab a table and a chair..."
+        m "I need to grab a table and a chair.{w=0.5}.{w=0.5}.{nw}"
         $ is_sitting = True
         show monika 6ekc at ls32 zorder MAS_MONIKA_Z
         m 6ekc "Was there anything you wanted, [player]?"
@@ -1807,7 +1796,7 @@ label monikaroom_greeting_cleanup:
         mas_disable_quit()
 
         # 2 - music is renabled
-        store.mas_hotkeys.music_enabled = True
+        mas_MUMUDropShield()
 
         # 3 - keymaps should be set
         set_keymaps()
@@ -1893,10 +1882,23 @@ label greeting_japan:
     m 2eub "Hello, [player]!"
     m 1eua "I'm just practicing Japanese."
     m 3eua "Let's see..."
-    m 4hub "Watashi ha itsumademo anata no mono desu!"
-    m 2hksdlb "Sorry if that didn't make sense!"
-    m 3eua "You know what that means, [player]?"
-    m 4ekbfa "It means '{i}I'll be yours forever{/i}'~"
+    $ shown_count = mas_getEV("greeting_japan").shown_count
+    if shown_count == 0:
+        m 4hub "Watashi ha itsumademo anata no mono desu!"
+        m 2hksdlb "Sorry if that didn't make sense!"
+        m 3eua "You know what that means, [player]?"
+        m 4ekbfa "It means {i}'I'll be yours forever'~{/i}"
+        return
+
+    m 4hub "Watashi wa itsumademo anata no mono desu!"
+    if shown_count == 1:
+        m 3eksdla "Last time I said that I made a mistake..."
+        m "In that sentence, you're supposed to say 'wa', not 'ha', like I did before."
+        m 4eka "Don't worry, [player], the meaning is still the same."
+        m 4ekbfa "I'll still be yours forever~"
+    else:
+        m 3eua "Remember what that means, [player]?"
+        m 4ekbfa "{i}'I'll be yours forever'~{/i}"
     return
 
 init 5 python:
@@ -1937,8 +1939,8 @@ init 5 python:
 
 label greeting_hai_domo:
     m 1hub "{=jpn_text}はいどうもー!{/=jpn_text}"
-    m "Virtual Girlfriend, Monika Here!"
-    m 1hksdlb "Ahaha, sorry! I've been watching a certain Virtual YouTuber lately."
+    m "Virtual girlfriend, Monika here!"
+    m 1hksdlb "Ahaha, sorry! I've been watching a certain Virtual Youtuber lately."
     m 1eua "I have to say, she's rather charming..."
     return
 
@@ -1957,7 +1959,7 @@ init 5 python:
 label greeting_french:
     m 1eua "Bonjour, [player]!"
     m 1hua "Savais-tu que tu avais de beaux yeux, mon amour?"
-    m 1hub "Ehehe!"
+    m 1hub "Ahaha!"
     m 3hksdlb "I'm practicing some French. I just told you that you have very beautiful eyes~"
     m 1eka "It's such a romantic language, [player]."
     m 1hua "Maybe both of us can practice it sometime, mon amour~"
@@ -2055,16 +2057,18 @@ label greeting_stillsick:
             jump greeting_stillsickrest
         "No.":
             jump greeting_stillsicknorest
+        "I'm already resting.":
+            jump greeting_stillsickresting
 
 label greeting_stillsickrest:
     if mas_isMoniNormal(higher=True):
-        m 2hua "Thank you [player]."
+        m 2hua "Thank you, [player]."
         m 2eua "I think if I leave you alone for a while, you'll be able to rest better."
         m 1eua "So I'm going to close the game for you."
         m 1eka "Get well soon, [player]. I love you so much!"
 
     else:
-        m 2ekc "Thank you [player]."
+        m 2ekc "Thank you, [player]."
         m "I think if I leave you alone for a while, you'll be able to rest better."
         m 4ekc "So I'm going to close the game for you."
         m 2ekc "Get well soon, [player]."
@@ -2075,7 +2079,7 @@ label greeting_stillsickrest:
 label greeting_stillsicknorest:
     if mas_isMoniNormal(higher=True):
         m 1lksdlc "I see..."
-        m "Well if you insist [player]."
+        m "Well if you insist, [player]."
         m 1ekc "I suppose you know your own limitations better than I do."
         m 1eka "If you start to feel a little weak or tired though, [player], please let me know."
         m "That way you can go get some rest."
@@ -2086,6 +2090,26 @@ label greeting_stillsicknorest:
         m 2ekc "Fine."
         m 2tkc "You never seem to want to listen to me, so why would I expect now to be any different."
 
+    # setting greet type here even tho we aren't quitting so she remembers you're sick next load
+    $ persistent._mas_greeting_type = store.mas_greetings.TYPE_SICK
+    return
+
+label greeting_stillsickresting:
+    m 1eka "Oh, that's a relief to hear, [player]."
+    m 3eka "I hope you're keeping yourself warm though."
+    if mas_isMoniNormal(higher=True):
+        m 1dku "Maybe snuggled in a warm blanket with a nice hot cup of tea."
+        m 2eka "Your health is really important to me [player], so make sure you take care of yourself."
+        show monika 5ekbsa at t11 zorder MAS_MONIKA_Z with dissolve
+        m 5ekbsa "...And if you're still feeling a little cold, I hope knowing I love you warms you up a bit."
+        m 5hua "Ehehe~"
+
+    else:
+        m 1eka "Maybe snuggled in a warm blanket with a nice hot cup of tea."
+        m 2eka "Your health is really important to me [player], so make sure you take care of yourself."
+
+    # setting greet type here even tho we aren't quitting so she remembers you're sick next load
+    $ persistent._mas_greeting_type = store.mas_greetings.TYPE_SICK
     return
 
 init 5 python:
@@ -2273,7 +2297,7 @@ label greeting_long_absence:
             m 1wud "Oh my gosh! [player]!"
             m 3hksdlb "I didn't expect you back so early."
             m 3ekbsa "I guess you missed me as much as I missed you~"
-            m 1eka "It really is wonderful to see back so soon though."
+            m 1eka "It really is wonderful to see you back so soon though."
             m 3ekb "I expected the day to be eventless...but thankfully, I now have you!"
             m 3hua "Thank you for coming back so early, my love."
 
@@ -2446,9 +2470,11 @@ label greeting_timeconcern_day:
 
 init 5 python:
     ev_rules = {}
-    ev_rules.update(
-        MASGreetingRule.create_rule(skip_visual=True, random_chance=5)
-    )
+    ev_rules.update(MASGreetingRule.create_rule(
+        skip_visual=True,
+        random_chance=5,
+        override_type=True
+    ))
     ev_rules.update(MASPriorityRule.create_rule(45))
 
     addEvent(
@@ -2466,12 +2492,8 @@ init 5 python:
 label greeting_hairdown:
 
     # couple of things:
-    # 1 - music hotkeys should be disabled
-    $ store.mas_hotkeys.music_enabled = False
-
-    # 2 - the calendar overlay will become visible, but we should keep it
-    # disabled
-    $ mas_calRaiseOverlayShield()
+    # shield ui
+    $ mas_RaiseShield_core()
 
     # 3 - keymaps not set (default)
     # 4 - hotkey buttons are hidden (skip visual)
@@ -2526,11 +2548,8 @@ label greeting_hairdown:
     $ mas_lockEvent(mas_getEV("greeting_hairdown"))
 
     # cleanup
-    # 1 - music hotkeys should be enabled
-    $ store.mas_hotkeys.music_enabled = True
-
-    # 2 - calendarovrelay enabled
-    $ mas_calDropOverlayShield()
+    # enable music menu
+    $ mas_MUMUDropShield()
 
     # 3 - set the keymaps
     $ set_keymaps()
@@ -2599,7 +2618,15 @@ label greeting_tears:
     m 2ekc "Please...just...try to understand."
     m 1dsd "I love you and I need you to show that you love me too..."
     m 1dsc "Otherwise...I just won't be able to handle it anymore."
-    $ mas_lockEVL("greeting_tears", "GRE")
+
+    python:
+        mas_lockEVL("greeting_tears", "GRE")
+
+        #Setup the being virtual ev
+        beingvirtual_ev = mas_getEV("monika_being_virtual")
+
+        if beingvirtual_ev:
+            beingvirtual_ev.start_date = datetime.datetime.now() + datetime.timedelta(days=2)
     return
 
 #New greetings for upset, distressed, and broken. Made quips for upset and distressed to allow for more variety of combos
@@ -2667,6 +2694,7 @@ label greeting_distressed:
             "Hopefully we can enjoy our time together.",
             "I wasn't expecting you.",
             "I hope things start going better soon.",
+            "I thought you forgot about me..."
         ]
 
     $ distressed_quip1 = renpy.random.choice(distressed_greeting_quips_first)
@@ -3048,6 +3076,7 @@ label greeting_siat:
 init 5 python:
     if not mas_cannot_decode_islands:
         ev_rules = {}
+        ev_rules.update(MASGreetingRule.create_rule(override_type=True))
         ev_rules.update(MASPriorityRule.create_rule(40))
 
         addEvent(
@@ -3092,11 +3121,6 @@ label greeting_ourreality:
     m 3hksdlb "I'm feeling rather giddy right now, sorry."
     m 1eua "It's just that I'm super excited to show you what I've been working on."
     m 3hksdrb "Just give me a second to get it ready..."
-
-    #Force def weather for this
-    if mas_current_weather != mas_weather_def:
-        call mas_change_weather(mas_weather_def)
-
     m 1dsc "..."
     m 1dsd "Almost done..."
     m 1duu "Yeah, that should be good."
@@ -3106,7 +3130,7 @@ label greeting_ourreality:
     m 4eub "Would you kindly look out the window, [player]"
     $ mas_OVLHide()
     $ disable_esc()
-    if morning_flag:
+    if mas_current_background.isFltDay():
         show mas_island_frame_day zorder 20
     else:
         show mas_island_frame_night zorder 20
@@ -3117,7 +3141,7 @@ label greeting_ourreality:
     m "It's also where I can keep practicing my programming skills."
     $ mas_OVLShow()
     $ enable_esc()
-    if morning_flag:
+    if mas_current_background.isFltDay():
         hide mas_island_frame_day
     else:
         hide mas_island_frame_night
@@ -3135,11 +3159,11 @@ label greeting_ourreality:
     m 1hua "But it's a start."
     # m 1eub "I'll let you admire the scenery for now."
     # m 1hub "Hope you like it!"
-    $ lockEventLabel("greeting_ourreality",eventdb=evhand.greeting_database)
-    $ unlockEventLabel("mas_monika_islands")
+    $ mas_lockEVL("greeting_ourreality", "GRE")
+    $ mas_unlockEVL("mas_monika_islands", "EVE")
 
     # we can push here because of the slightly optimized call_next_event
-    $ pushEvent("mas_monika_islands",True)
+    $ pushEvent("mas_monika_islands",skipeval=True)
     return
 
 init 5 python:
@@ -3175,12 +3199,24 @@ label greeting_returned_home:
     if persistent._mas_f14_on_date:
         jump greeting_returned_home_f14
 
-    if mas_f14 < datetime.date.today() <= mas_f14 + datetime.timedelta(7):
+
+    # gone over checks
+    if mas_f14 < datetime.date.today() <= mas_f14 + datetime.timedelta(days=7):
         # did we miss f14 because we were on a date
         call mas_gone_over_f14_check
 
-    if mas_monika_birthday < datetime.date.today() < mas_monika_birthday + datetime.timedelta(7):
+    if mas_monika_birthday < datetime.date.today() < mas_monika_birthday + datetime.timedelta(days=7):
         call mas_gone_over_bday_check
+
+    if mas_d25 < datetime.date.today() <= mas_nye:
+        call mas_gone_over_d25_check
+
+    if mas_nyd <= datetime.date.today() <= mas_d25c_end:
+        call mas_gone_over_nye_check
+
+    if mas_nyd < datetime.date.today() <= mas_d25c_end:
+        call mas_gone_over_nyd_check
+
 
     # NOTE: this ordering is key, greeting_returned_home_player_bday handles the case
     # if we left before f14 on your bday and return after f14
@@ -3204,17 +3240,8 @@ label greeting_returned_home:
         if _return:
             return 'quit'
 
+        jump greeting_returned_home_cleanup
 
-label greeting_returned_home_cleanup:
-    $ need_to_reset_bday_decor = persistent._mas_player_bday_in_player_bday_mode and not mas_isplayer_bday()
-
-    #If it's not o31, and we've got deco up, we need to clean up
-    if not need_to_reset_bday_decor and not mas_isO31() and persistent._mas_o31_in_o31_mode:
-        call mas_o31_ret_home_cleanup(time_out)
-
-    elif need_to_reset_bday_decor:
-        call return_home_post_player_bday
-    return
 
 label greeting_returned_home_morethan5mins:
     if mas_isMoniNormal(higher=True):
@@ -3232,13 +3259,6 @@ label greeting_returned_home_morethan5mins:
     # otherwise, go to other flow
     jump greeting_returned_home_morethan5mins_other_flow
 
-#TODO: Clean this up eventually
-label greeting_returned_home_morethan5mins_cleanup:
-
-    $ grant_xp(xp.NEW_GAME)
-
-    # jump to cleanup
-    jump greeting_returned_home_cleanup
 
 label greeting_returned_home_morethan5mins_normalplus_flow:
     call greeting_returned_home_morethan5mins_normalplus_dlg
@@ -3253,10 +3273,35 @@ label greeting_returned_home_morethan5mins_other_flow:
     # FALL THROUGH
 
 label greeting_returned_home_morethan5mins_other_flow_aff:
-    # changed the point structure for low aff, might be a good idea, might now ~ JW
-    # you gain 0.5 per hour, max 2.5, min 0.5
+    # for low aff you gain 0.5 per hour, max 2.5, min 0.5
     $ store.mas_dockstat._ds_aff_for_tout(time_out, 5, 2.5, 0.5, 0.5)
-    jump greeting_returned_home_morethan5mins_cleanup
+    #FALL THROUGH
+
+label greeting_returned_home_morethan5mins_cleanup:
+    pass
+    # TODO: re-evaluate this XP gain when rethinking XP. Going out with
+    #   monika could be seen as gaining xp
+    # $ grant_xp(xp.NEW_GAME)
+    #FALL THROUGH
+
+label greeting_returned_home_cleanup:
+    $ need_to_reset_bday_vars = persistent._mas_player_bday_in_player_bday_mode and not mas_isplayer_bday()
+
+    #If it's not o31, and we've got deco up, we need to clean up
+    if not need_to_reset_bday_vars and not mas_isO31() and persistent._mas_o31_in_o31_mode:
+        call mas_o31_ret_home_cleanup(time_out)
+
+    elif need_to_reset_bday_vars:
+        call return_home_post_player_bday
+
+    # Check if we are entering d25 season at upset-
+    if (
+        mas_isD25Outfit()
+        and not persistent._mas_d25_intro_seen
+        and mas_isMoniUpset(lower=True)
+    ):
+        $ persistent._mas_d25_started_upset = True
+    return
 
 label greeting_returned_home_morethan5mins_normalplus_dlg:
     m 1hua "And we're home!"
@@ -3504,10 +3549,10 @@ label greeting_back_from_game:
                     m 1hua "That's nice."
                     m 1eua "I'm glad you enjoyed yourself."
                     m 2eka "I really wish I could join you in your other games sometimes."
-                    m 3eub "Wouldn't it be great to have our own little adventures anytime we wanted?"
+                    m 3eub "Wouldn't it be great to have our own little adventures any time we wanted?"
                     m 1hub "I'm sure we'd have a lot of fun together in one of your games."
                     m 3eka "But while I can't join you, I guess you'll just have to keep me company."
-                    m 2tub "You don't mind spending time with your girlfriend...{w=1} Do you, [player]?"
+                    m 2tub "You don't mind spending time with your girlfriend...{w=0.5}do you, [player]?"
 
                 "No.":
                     m 2ekc "Aw, I'm sorry to hear that."
@@ -3628,7 +3673,7 @@ label greeting_rent:
     show monika 5ekbsa at t11 zorder MAS_MONIKA_Z with dissolve
     m 5ekbsa "But in all seriousness, you've already given me the only thing I need...{w=1}your heart~"
     return
-    
+
 init 5 python:
     addEvent(
         Event(
@@ -3647,7 +3692,7 @@ label greeting_back_housework:
     elif mas_isMoniUpset():
         m 2esc "At least you didn't forget to come back, [player]."
     elif mas_isMoniDis():
-        m 6ekd "Ah, [player]. So you really were just busy..."    
+        m 6ekd "Ah, [player]. So you really were just busy..."
     else:
         m 6ckc "..."
     return
@@ -3671,4 +3716,25 @@ label greeting_surprised2:
     extend 3rkbsa "You just caught me daydreaming a bit."
     show monika 5hubfu at t11 zorder MAS_MONIKA_Z with dissolve
     m 5hubfu "But now that you're here, that dream just came true~"
+    return
+
+init 5 python:
+    addEvent(
+        Event(
+            persistent.greeting_database,
+            eventlabel="greeting_back_from_restart",
+            unlocked=True,
+            category=[store.mas_greetings.TYPE_RESTART],
+        ),
+        code="GRE"
+    )
+
+label greeting_back_from_restart:
+    if mas_isMoniNormal(higher=True):
+        m 1hub "Welcome back, [player]!"
+        m 1eua "What else should we do today?"
+    elif mas_isMoniBroken():
+        m 6ckc "..."
+    else:
+        m 1eud "Oh, you're back."
     return
